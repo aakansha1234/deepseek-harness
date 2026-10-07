@@ -13,6 +13,7 @@ import {
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { inspectSystemPrompt } from '../../ui-conversation/src/client/contract/system-prompt.ts'
 import { AssistantStreamAccumulator } from '@deepseek-ai/dsh-llm/assistant-stream'
+import { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import { LlmAttemptId } from '@deepseek-ai/dsh-llm/brand'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { hasAssistantReplyContent } from '../src/client/contract/assistant-content.ts'
@@ -158,6 +159,14 @@ function assembler(entries: readonly SessionEventLikeEntry[] = [], hasMore = fal
   return value
 }
 
+/** A user-sourced slash-command lifecycle occupying `seq` and `seq + 1`. */
+function commandEvents(seq: number, commandId: string, name: string): SessionLiveEventEntry[] {
+  return [
+    at(seq, 'command/run', { commandId, name, source: { kind: 'user' } }),
+    at(seq + 1, 'command/done', { commandId, kind: 'success' }),
+  ]
+}
+
 function snapshot(value: ConversationNodeAssembler): ChatSnapshot {
   const current = value.snapshot('chat') as ChatSnapshot | undefined
   if (current === undefined) throw new Error('chat view was not registered')
@@ -298,22 +307,44 @@ describe('built-in conversation node Definitions', () => {
   })
 
   it('keeps ordinary command-only history inactive for the Conversation shell', () => {
-    const value = assembler([
-      at(1, 'command/run', {
-        commandId: 'command-1',
-        name: 'help',
-        source: { kind: 'user' },
-      }),
-      at(2, 'command/done', {
-        commandId: 'command-1',
-        kind: 'success',
-      }),
-    ])
+    const value = assembler(commandEvents(1, 'command-1', 'help'))
     const current = snapshot(value)
 
     expect(current.order).toHaveLength(1)
     expect(current.nodes.get(current.order[0] ?? '')?.kind).toBe('command')
-    expect(chatViewDefinition.isActive?.(current)).toBe(false)
+    expect(chatViewDefinition.isActive?.(current, { commands: new Set() })).toBe(false)
+    expect(value.activityTargets()).toEqual(new Set())
+  })
+
+  it('activates Chat for a command this Client executed, whether its events arrive before or after the record', () => {
+    const recordedFirst = assembler()
+    recordedFirst.recordExecutedCommand(CommandId('command-1'))
+    for (const entry of commandEvents(1, 'command-1', 'login')) recordedFirst.append(entry)
+    recordedFirst.flush()
+    expect(recordedFirst.activityTargets()).toEqual(new Set(['chat']))
+
+    const eventsFirst = assembler(commandEvents(1, 'command-1', 'login'))
+    expect(eventsFirst.activityTargets()).toEqual(new Set())
+    expect(eventsFirst.recordExecutedCommand(CommandId('command-1'))).toBe(true)
+    expect(eventsFirst.recordExecutedCommand(CommandId('command-1'))).toBe(false)
+    expect(eventsFirst.activityTargets()).toEqual(new Set(['chat']))
+  })
+
+  it('keeps Chat inactive for executed commands it hides or whose mode the composer presents', () => {
+    const value = assembler([
+      ...commandEvents(1, 'command-1', 'permission'),
+      ...commandEvents(3, 'command-2', 'plan'),
+      ...commandEvents(5, 'command-3', 'help'),
+    ])
+
+    value.recordExecutedCommand(CommandId('command-1'))
+    value.recordExecutedCommand(CommandId('command-2'))
+    value.recordExecutedCommand(CommandId('command-unknown'))
+    expect(snapshot(value).order).toHaveLength(2)
+    expect(value.activityTargets()).toEqual(new Set())
+
+    value.recordExecutedCommand(CommandId('command-3'))
+    expect(value.activityTargets()).toEqual(new Set(['chat']))
   })
 
   it('keeps the Turn rail projection current when a chunk updates one node in place', () => {

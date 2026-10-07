@@ -27,6 +27,8 @@ Each Session keeps a monotonic set of active targets. Creating or reading a targ
 
 The shell owns View selection and resolves the registered preferred View or Chat fallback before rendering when a binding is created or selected as current, and after View-roster changes. The assembler receives only the resolved target id and does not select Chat or another default target. A third-party View participates through the same selection and activation operations. A View Definition may expose `toolCallFocus(callId)`; the shell supplies Inspect only for a visible target that declares this capability, and the target maps the call id to its own focus identity.
 
+A View Definition may expose `isActive(snapshot, local)` to classify its latest snapshot as Conversation activity; any active target moves the shell out of a blank Session's Hero. `local` is the `ConversationLocalActivity` recorded for the binding: `commands` holds the Host command executions this Client's composer started, recorded with `ctx.uiConversation.recordExecutedCommand(binding, commandId)`; `ctx.uiConversation.clearLocalActivity(binding)` empties the record when New Session presents a reused blank Session as new. Each change re-evaluates activity and publishes only when the active targets change, so the result does not depend on whether the command's events arrive before or after the Host admits it.
+
 <a id="group-definitions"></a>
 ## Group Definitions
 
@@ -283,5 +285,6 @@ Add focused tests that establish these outcomes:
 6. The keyed renderer consumes `node.data` and constrained Location hooks only; it does not scan the Session event window, Contexts, or Chat Nodes.
 7. Scalar and packed Assistant history produce the same final State, timing boundaries, and target snapshot, while one packed run remains one Match through replace, prepend, Location replay, and registry rebuild.
 8. Creating a target source performs no builder work; explicit selection or the first subscription performs one complete replacement, later updates reach every active target, and repeated activation performs no replacement.
+9. A target whose activity reads `local` reports the same activity whether a recorded execution precedes or follows its events, recording the same execution again publishes nothing, and clearing the record returns the target to its history-only activity.
 
 Use [`packages/client/ui-chat/src/client/conversation-nodes/assistant.ts`](../../packages/client/ui-chat/src/client/conversation-nodes/assistant.ts) for streaming and interruption, [`inbox.ts`](../../packages/client/ui-chat/src/client/conversation-nodes/inbox.ts) plus [`message.ts`](../../packages/client/ui-chat/src/client/conversation-nodes/message.ts) for predecessor queries, and [`packages/client/ui-deliverables`](../../packages/client/ui-deliverables) for a Definition that publishes Turn data without creating its own Node.

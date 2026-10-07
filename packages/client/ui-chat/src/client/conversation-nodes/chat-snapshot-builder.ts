@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { notifySubscribers, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type {
-  ConversationLocation, ConversationNode, ConversationTimelineSnapshot, ConversationViewBuilder,
+  ConversationLocalActivity, ConversationLocation, ConversationNode, ConversationTimelineSnapshot, ConversationViewBuilder,
   ConversationViewDefinition, ConversationGroupInput, GroupNodePosition, NodeChange, NodeKey, PartialAssistant, RunningToolCall,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatConversationViewNode, ChatNode, ChatNodeDataMap, ChatNodeKind } from '../contract/chat-nodes.ts'
@@ -1199,11 +1199,38 @@ function locationIdentity(location: ConversationLocation): string {
   return `${location.kind}:${coordinates.turn ?? ''}:${coordinates.step ?? ''}`
 }
 
+/**
+ * First-party commands that switch a Session mode the composer presents with
+ * its own control: `/plan` and the Plan chip. Their rows remain ordinary
+ * history, but running one in a blank Session keeps the Hero and its setup
+ * controls, because the control already shows the outcome.
+ */
+const MODE_COMMANDS: ReadonlySet<string> = new Set(['plan'])
+
+/**
+ * Chat activity over its visible order: any non-command Node, or a command
+ * Node whose execution this Client's composer started, unless it switches a
+ * mode the composer presents. Command-only history stays inactive, so a
+ * reused blank Session keeps its Hero while the result of a command typed
+ * into it is shown.
+ * @param snapshot - latest Chat snapshot.
+ * @param local - interaction this Client recorded for the Session.
+ * @returns whether Chat contributes Conversation activity.
+ */
+function isChatActive(snapshot: ChatSnapshot, local: ConversationLocalActivity): boolean {
+  return snapshot.order.some((key) => {
+    const node = snapshot.nodes.get(key) as ChatNode | undefined
+    if (node?.kind !== 'command') return true
+    const { commandId, name } = node.data
+    return local.commands.has(commandId) && (name === null || !MODE_COMMANDS.has(name))
+  })
+}
+
 /** Chat target factory contributed to the Conversation view registry. */
 export const chatViewDefinition: ConversationViewDefinition<ChatConversationViewNode, ChatSnapshot> = {
   target: 'chat',
   create: () => new ChatSnapshotBuilder(),
-  isActive: snapshot => snapshot.order.some(key => snapshot.nodes.get(key)?.kind !== 'command'),
+  isActive: isChatActive,
 }
 
 /**

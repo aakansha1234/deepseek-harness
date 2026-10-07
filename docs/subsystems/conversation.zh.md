@@ -27,6 +27,8 @@ Chat 与 Trajectory 可以识别同一个持久 event family，但各自保留�
 
 shell 拥有 View 选择，并在 binding 创建、被选为 current 或 View roster 变化时，于渲染前解析已注册的偏好 View 或 Chat fallback。assembler 只接收解析后的 target id，不自行选择 Chat 或其他默认 target。第三方 View 使用相同的选择与激活操作。View Definition 可以提供 `toolCallFocus(callId)`；shell 仅为声明了此能力且可见的目标提供 Inspect，由目标将调用 id 映射为自己的焦点标识。
 
+View Definition 可以提供 `isActive(snapshot, local)`，把最新 snapshot 判定为 Conversation activity；任一 active target 都会使 shell 离开空白 Session 的 Hero。`local` 是为该 binding 记录的 `ConversationLocalActivity`：`commands` 保存本 Client composer 发起的 Host command 执行，通过 `ctx.uiConversation.recordExecutedCommand(binding, commandId)` 记录；新建会话把复用的空白 Session 作为新会话呈现时，`ctx.uiConversation.clearLocalActivity(binding)` 清空该记录。每次变更都会重新计算 activity，且仅在 active target 变化时发布，因此结果与 command 的 event 早于还是晚于 Host 受理到达无关。
+
 <a id="group-definitions"></a>
 ## Group Definition
 
@@ -283,5 +285,6 @@ Assembler 会记录这项依赖。如果后续 older prepend 带来了更近的�
 6. keyed renderer 只消费 `node.data` 与受限 Location hook，不扫描 Session 事件窗口、Context 或 Chat Node。
 7. scalar 与 packed Assistant 历史产生相同的最终 State、timing boundary 和 target snapshot；一个 packed run 在 replace、prepend、Location replay 与 registry rebuild 中始终只保留一个 Match。
 8. 创建 target source 不执行 builder 工作；显式选择或首次订阅执行一次完整 replace，后续更新送达所有 active target，重复激活不会再次 replace。
+9. 读取 `local` 的 target 无论记录的执行早于还是晚于其 event，都报告相同的 activity；再次记录同一执行不会发布任何更新；清空记录后，target 回到仅由历史决定的 activity。
 
 流式与中断处理可参考 [`packages/client/ui-chat/src/client/conversation-nodes/assistant.ts`](../../packages/client/ui-chat/src/client/conversation-nodes/assistant.ts)，前序查询可参考 [`inbox.ts`](../../packages/client/ui-chat/src/client/conversation-nodes/inbox.ts) 与 [`message.ts`](../../packages/client/ui-chat/src/client/conversation-nodes/message.ts)，只发布 Turn data 而不创建自有 Node 的例子见 [`packages/client/ui-deliverables`](../../packages/client/ui-deliverables)。

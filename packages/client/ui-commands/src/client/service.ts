@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the ctx.remote merge and the forwarded-event key face
 // (`commands/change` rides the allowlist) into this program.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type { CommandResult } from '@deepseek-ai/dsh-commands/types'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions, SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -396,23 +397,45 @@ export class CommandUiRuntime extends Service implements CommandUiContract {
    * the outcome renders as a persistent flow node — the composer never
    * echoes it. A handler error result reports an error outcome so the
    * composer keeps the draft and attachments for correction.
-   * A refused call throws.
+   * A refused call throws. Every composer route — an argument claim, a bare
+   * Enter, or a menu pick — executes here, so an admitted execution is
+   * recorded as this Client's interaction with the submitting Session.
    */
   private async execute(
     session: ClientSessionContext,
     line: string,
     attachments: readonly SubmitAttachment[] = [],
   ): Promise<SubmitOutcome> {
+    const submitting = this.sessions().binding(session.sessionId)
     const result = await this.ctx.remote.commands.execute(session.sessionId, line, attachments)
     if (!result.ok) throw new Error(`command.execute failed: ${result.error.code}: ${result.error.message}`)
     if (result.value === undefined) return { kind: 'error', text: `unknown or malformed command: ${line}` }
-    this.notifyExecuted(session.sessionId, submittedCommandName(line), result.value.result)
+    const name = submittedCommandName(line)
+    this.recordExecution(submitting, name, result.value.commandId)
+    this.notifyExecuted(session.sessionId, name, result.value.result)
     // A submission consumes its attachments only after handler success; an
     // error outcome keeps the draft and attachments in the composer.
     if (attachments.length > 0 && result.value.result.kind === 'error') {
       return { kind: 'error', text: result.value.result.text }
     }
     return { kind: 'success' }
+  }
+
+  /**
+   * Record an admitted execution with the Conversation of the Session
+   * generation that submitted it, so the command's row counts as this
+   * Client's activity. A generation replaced while the call was in flight
+   * loads the command as history instead. Presentation bookkeeping cannot
+   * change command admission, so a failure is logged and contained.
+   */
+  private recordExecution(submitting: SessionBinding | undefined, name: string, commandId: CommandId): void {
+    if (submitting === undefined || this.sessions().binding(submitting.sessionId) !== submitting) return
+    try {
+      this.ctx.get('uiConversation')?.recordExecutedCommand(submitting, commandId)
+    } catch (error) {
+      this.ctx.logger.warn('client command: recording the execution of "%s" failed', name)
+      this.ctx.logger.warn(error)
+    }
   }
 
   /** Publish the local acknowledgment without letting an observer change command admission. */

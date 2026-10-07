@@ -13,7 +13,7 @@ export type {
 export { ConversationController, UnsupportedImageMediaTypeError } from './service.ts'
 export type { IConversation } from './service.ts'
 export type {
-  ConversationContextReader, ConversationLocation,
+  ConversationContextReader, ConversationLocalActivity, ConversationLocation,
   ConversationLocationData, ConversationLocationDataScope, ConversationLocationDataSource,
   ConversationLocationDataStore,
   ConversationMatch, ConversationMatchHandler, ConversationMatchResult, ConversationNodeContext,

@@ -4,6 +4,7 @@ import { SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { createAssistantMessage, LlmAttemptId } from '@deepseek-ai/dsh-llm'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import {
   createScope, MutableSessionEventSource,
 } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -446,6 +447,81 @@ describe('Conversation registries', () => {
     await Promise.resolve()
     expect(rebuild).toHaveBeenCalledTimes(2)
     rebuild.mockRestore()
+  })
+
+  it('publishes target activity once when a command execution is recorded for the Session', async () => {
+    const { uiConversation, binding, views } = await bootRegistries()
+    const executed = CommandId('command-1')
+    views.register({
+      ...viewDefinition('chat'),
+      isActive: (_snapshot, local) => local.commands.has(executed),
+    })
+    await Promise.resolve()
+    const conversation = uiConversation.binding(binding)
+    conversation.activate('chat')
+    const listener = vi.fn()
+    conversation.snapshot.subscribe(listener)
+
+    uiConversation.recordExecutedCommand(binding, CommandId('command-unrelated'))
+    expect(listener).not.toHaveBeenCalled()
+    expect(conversation.snapshot.getSnapshot().activeTargets).toEqual(new Set())
+
+    uiConversation.recordExecutedCommand(binding, executed)
+    expect(listener).toHaveBeenCalledOnce()
+    expect(conversation.snapshot.getSnapshot().activeTargets).toEqual(new Set(['chat']))
+
+    uiConversation.recordExecutedCommand(binding, executed)
+    expect(listener).toHaveBeenCalledOnce()
+  })
+
+  it('publishes the cleared activity once when the Session is presented as new, and records again afterward', async () => {
+    const { uiConversation, binding, views } = await bootRegistries()
+    const executed = CommandId('command-1')
+    views.register({
+      ...viewDefinition('chat'),
+      isActive: (_snapshot, local) => local.commands.size > 0,
+    })
+    await Promise.resolve()
+    const conversation = uiConversation.binding(binding)
+    conversation.activate('chat')
+    uiConversation.recordExecutedCommand(SESSION_ID, executed)
+    expect(conversation.snapshot.getSnapshot().activeTargets).toEqual(new Set(['chat']))
+    const listener = vi.fn()
+    conversation.snapshot.subscribe(listener)
+
+    uiConversation.clearLocalActivity(SESSION_ID)
+    expect(listener).toHaveBeenCalledOnce()
+    expect(conversation.snapshot.getSnapshot().activeTargets).toEqual(new Set())
+    uiConversation.clearLocalActivity(binding)
+    expect(listener).toHaveBeenCalledOnce()
+
+    uiConversation.recordExecutedCommand(binding, executed)
+    expect(listener).toHaveBeenCalledTimes(2)
+    expect(conversation.snapshot.getSnapshot().activeTargets).toEqual(new Set(['chat']))
+  })
+
+  it('clears local activity without creating a Conversation binding for a Session that has none', async () => {
+    const { uiConversation, binding } = await bootRegistries()
+    const subscribe = vi.spyOn(binding.eventSource, 'subscribe')
+    uiConversation.clearLocalActivity(binding)
+    expect(subscribe).not.toHaveBeenCalled()
+    uiConversation.binding(binding)
+    expect(subscribe).toHaveBeenCalledOnce()
+  })
+
+  it('names the called method when local activity addresses an unknown or retired Session binding', async () => {
+    const { uiConversation, binding } = await bootRegistries()
+    const retired: SessionBinding = { ...binding }
+    const unknown = 'missing' as SessionId
+    expect(() => { uiConversation.recordExecutedCommand(unknown, CommandId('command-1')) })
+      .toThrow('uiConversation.recordExecutedCommand: unknown session "missing"')
+    expect(() => { uiConversation.recordExecutedCommand(retired, CommandId('command-1')) })
+      .toThrow('uiConversation.recordExecutedCommand: inactive session "resident"')
+    expect(() => { uiConversation.clearLocalActivity(unknown) })
+      .toThrow('uiConversation.clearLocalActivity: unknown session "missing"')
+    expect(() => { uiConversation.clearLocalActivity(retired) })
+      .toThrow('uiConversation.clearLocalActivity: inactive session "resident"')
+    expect(() => uiConversation.binding(retired)).toThrow('uiConversation.binding: inactive session "resident"')
   })
 
   it('activates each target on explicit selection or first use and never deactivates it', async () => {

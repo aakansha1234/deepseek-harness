@@ -1,6 +1,7 @@
 /** Per-Session target-neutral Conversation assembly. */
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type {
   ISessions, SessionBinding, SessionEventSource, SessionEventWindow,
 } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -96,6 +97,14 @@ class BoundConversation implements ConversationBinding {
     this.openTurn.set(this.assembler.openTurn())
   }
 
+  recordExecutedCommand(commandId: CommandId): void {
+    if (this.assembler.recordExecutedCommand(commandId)) this.publishActivity()
+  }
+
+  clearLocalActivity(): void {
+    if (this.assembler.clearLocalActivity()) this.publishActivity()
+  }
+
   rebuild(): void { this.publish(this.assembler.rebuildRegistry()) }
 
   dispose(): void {
@@ -168,12 +177,23 @@ class BoundConversation implements ConversationBinding {
     this.openTurn.set(this.assembler.openTurn())
   }
 
+  /** Publish a local-activity change only when it changes which targets are active. */
+  private publishActivity(): void {
+    const next = this.currentSnapshot()
+    if (sameTargets(next.activeTargets, this.snapshot.getSnapshot().activeTargets)) return
+    this.snapshot.set(next)
+  }
+
   private currentSnapshot(): ConversationSnapshot {
     return {
       views: this.viewStore,
       activeTargets: this.assembler.activityTargets(),
     }
   }
+}
+
+function sameTargets(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every(target => right.has(target))
 }
 
 interface BindingRecord {
@@ -235,26 +255,30 @@ export class UiConversation extends Service {
    * @throws if the Session is unknown or its binding is no longer current.
    */
   binding(source: SessionBinding | SessionId): ConversationBinding {
-    const sessionId = typeof source === 'string' ? source : source.sessionId
-    const owner = typeof source === 'string' ? this.sessions.binding(source) : source
-    if (owner === undefined) throw new Error(`uiConversation.binding: unknown session "${sessionId}"`)
-    if (this.sessions.binding(sessionId) !== owner) {
-      throw new Error(`uiConversation.binding: inactive session "${sessionId}"`)
-    }
-    const current = this.bindings.get(owner)
-    if (current !== undefined) return current.binding
-    const binding = new BoundConversation(
-      owner.eventSource,
-      new ConversationNodeAssembler(this.events, this.views, this.groups),
-    )
-    const record: BindingRecord = { source: owner, binding, disposeScope: () => {} }
-    this.bindings.set(owner, record)
-    const disposeScope = owner.ctx.effect(
-      () => () => { this.drop(record, false) },
-      'ui-conversation binding',
-    )
-    record.disposeScope = () => { void disposeScope() }
-    return binding
+    return this.record(this.current(source, 'binding')).binding
+  }
+
+  /**
+   * Record a Host command execution this Client's composer started in one
+   * Session. Target activity counts its presentation until the Session is
+   * presented as new again; the record is not persisted.
+   * @param source - Session binding or identity.
+   * @param commandId - pairing id the Host executor returned.
+   * @throws if the Session is unknown or its binding is no longer current.
+   */
+  recordExecutedCommand(source: SessionBinding | SessionId, commandId: CommandId): void {
+    this.record(this.current(source, 'recordExecutedCommand')).binding.recordExecutedCommand(commandId)
+  }
+
+  /**
+   * Present one Session as new: forget the interaction this Client recorded
+   * for it, so a reused blank Session shows its Hero again. A Session without
+   * a Conversation binding has nothing recorded and gains no binding.
+   * @param source - Session binding or identity.
+   * @throws if the Session is unknown or its binding is no longer current.
+   */
+  clearLocalActivity(source: SessionBinding | SessionId): void {
+    this.bindings.get(this.current(source, 'clearLocalActivity'))?.binding.clearLocalActivity()
   }
 
   /**
@@ -319,6 +343,35 @@ export class UiConversation extends Service {
     system: SystemPromptNode | undefined,
   ): RequestPromptInspection {
     return inspectRequestPrompt(previous, event, system)
+  }
+
+  /** Resolve the current Controller binding a caller addresses, or throw naming the called method. */
+  private current(source: SessionBinding | SessionId, method: string): SessionBinding {
+    const sessionId = typeof source === 'string' ? source : source.sessionId
+    const owner = typeof source === 'string' ? this.sessions.binding(source) : source
+    if (owner === undefined) throw new Error(`uiConversation.${method}: unknown session "${sessionId}"`)
+    if (this.sessions.binding(sessionId) !== owner) {
+      throw new Error(`uiConversation.${method}: inactive session "${sessionId}"`)
+    }
+    return owner
+  }
+
+  /** Resolve, or create, the binding record of one current Controller binding. */
+  private record(owner: SessionBinding): BindingRecord {
+    const current = this.bindings.get(owner)
+    if (current !== undefined) return current
+    const binding = new BoundConversation(
+      owner.eventSource,
+      new ConversationNodeAssembler(this.events, this.views, this.groups),
+    )
+    const record: BindingRecord = { source: owner, binding, disposeScope: () => {} }
+    this.bindings.set(owner, record)
+    const disposeScope = owner.ctx.effect(
+      () => () => { this.drop(record, false) },
+      'ui-conversation binding',
+    )
+    record.disposeScope = () => { void disposeScope() }
+    return record
   }
 
   private drop(record: BindingRecord, releaseScope: boolean): void {

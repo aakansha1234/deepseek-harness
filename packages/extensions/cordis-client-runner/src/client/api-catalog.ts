@@ -342,7 +342,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'openWorkspace(workspaceId: WorkspaceId, beforeOpen?: (sessionId: SessionId) => void): Promise<void>',
-        description: 'Connect a Workspace and open its Session unless a later navigation supersedes it.',
+        description: 'Connect a Workspace and open its Session unless a later navigation supersedes it. The opened Session presents as new: a reused blank Session drops the interaction this Client recorded in its Conversation and shows its Hero.',
         parameters: [{ name: 'workspaceId', description: 'target Workspace.' }, { name: 'beforeOpen', description: 'optional synchronous preparation for the selected Session, skipped after supersession; a throw aborts the open and releases the retained reference.' }],
         returns: 'completion; a superseded request may create a Session but does not open it.',
         throws: ['on failure; a refused creation is also shown through the Workspace notice unless a later navigation or disposal superseded the request.'],

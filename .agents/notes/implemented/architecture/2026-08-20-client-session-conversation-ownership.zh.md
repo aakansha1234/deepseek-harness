@@ -283,7 +283,7 @@ View 选择顺序固定为：有效的持久化 selection、已注册的 `chat`�
 
 没有 `ui-chat` 时 shell 仍能激活和 mount，但不会隐式选择 Trajectory 或其他 target。
 
-Shell phase 由 Session lifecycle 与 Conversation target activity 纯合成。Session 已 active 或任一 target 报告可见内容时显示 active；首条 prompt 失败仍保持 engaging。
+Shell phase 由 Session lifecycle 与 Conversation target activity 纯合成。Session 已 active 或任一 target 报告可见内容时显示 active；首条 prompt 失败仍保持 engaging。Target 的 activity 规则还会收到本 Client 为该 binding 记录的交互，因此可以计入这些交互的呈现，而不计入 binding 加载的历史。Command UI 通过 `uiConversation.recordExecutedCommand` 记录它从 composer 发起的每次 Host command 执行；新建会话把复用的空白 Session 作为新会话呈现时，通过 `uiConversation.clearLocalActivity` 清空该记录。该记录随每个 binding 从空开始，不做持久化。
 
 ### Input 与 composer
 
@@ -301,7 +301,7 @@ Draft 与输入状态属于 Conversation UI，不进入 Session snapshot。Queue
 
 它通过 `ctx.uiSession.provide()` 注册 `chat` target source。`ChatView` 使用 `useChat` 读取聚合 order、navigation 与 timeline；每个 `ChatNodeSeat` 从该 snapshot 接收身份稳定的 Node 与 Turn-process source，不订阅聚合 source。
 
-Chat activity 只由可见且非 command 的 Chat Node 激活。普通 command-only history 保持 Hero，`/goal` 的 `command-input` Node 激活 fresh Conversation。
+Chat activity 由可见且非 command 的 Chat Node 激活，也由本 Client composer 发起执行的可见 command Node 激活，但 `/plan` 除外，其模式由 composer 的 Plan 控件呈现。普通 command-only history 保持 Hero，因此空白 Session 重新打开或被新建会话复用时仍显示 Hero，而在其中输入的 command 会显示结果；`/goal` 的 `command-input` Node 激活 fresh Conversation。
 
 历史图片 cache 已移入 `ui-conversation`（`ctx.uiConversation.imageUrl`），Chat 与 Trajectory 对同一会话附件共享一次授权读取和一个浏览器 URL（[Trajectory 持久化图片附件](../../archived/feature/2026-08-24-trajectory-image-attachments.md)）；Draft 图片仍属于 Conversation input。
 

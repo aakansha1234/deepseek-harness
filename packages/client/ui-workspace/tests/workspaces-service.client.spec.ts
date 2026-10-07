@@ -17,7 +17,7 @@ import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import type { DraftInitializationOptions, SessionInputResolver } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { DraftInitializationOptions, SessionInputResolver, UiConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { RowToast } from '../src/client/contract/slots.ts'
 import { DirectoryBrowseError, UiWorkspaceService } from '../src/client/navigation.ts'
 import { en, zh } from '../src/client/locales.ts'
@@ -272,6 +272,7 @@ class FakeDirectoryPicker {
 
 interface BenchOptions {
   readonly conversation?: boolean
+  readonly uiConversation?: boolean
   readonly configureWorkspaces?: (workspaces: FakeWorkspaces) => void
   readonly workspaces?: WorkspaceSnapshot
   readonly sessions?: SessionListState
@@ -287,6 +288,8 @@ function bench(options: BenchOptions = {}) {
   ctx.provide('locale', locale)
   const requestDraftInitialization = vi.fn<SessionInputResolver['requestDraftInitialization']>(() => 'applied')
   if (options.conversation !== false) ctx.provide('conversation', { input: { requestDraftInitialization } })
+  const clearLocalActivity = vi.fn<UiConversation['clearLocalActivity']>()
+  if (options.uiConversation !== false) ctx.provide('uiConversation', { clearLocalActivity })
   const layout = new LayoutController({
     selectPanel: vi.fn(), retainMainPanels: vi.fn(),
     setSidebar: vi.fn(), toggleSidebar: vi.fn(), setViewportWidth: vi.fn(),
@@ -310,7 +313,10 @@ function bench(options: BenchOptions = {}) {
     view.actions,
     notify,
   )
-  return { ctx, directoryPicker, sessions, uiWorkspace, workspaces, layout, selectPanel, view, notify, requestDraftInitialization }
+  return {
+    ctx, directoryPicker, sessions, uiWorkspace, workspaces, layout, selectPanel, view, notify, requestDraftInitialization,
+    clearLocalActivity,
+  }
 }
 
 function lastOpening(open: MockInstance<UiWorkspaceService['openWorkspace']>): Promise<void> {
@@ -756,6 +762,49 @@ describe('UiWorkspaceService', () => {
     expect(b.selectPanel).toHaveBeenCalledWith(null)
   })
 
+  describe('New Session presentation', () => {
+    it('presents the reused blank Session already on screen as new once it is the selection', async () => {
+      const backing = persistSelection({})
+      const b = bench({
+        workspaces: workspaceState([workspace('a', [sid('blank')])]),
+        sessions: sessionState([summary('blank', { blank: true, cwd: '/w/a' })], 'pending'),
+      })
+      const opening = vi.spyOn(b.uiWorkspace, 'openWorkspace')
+      b.uiWorkspace.openSession(sid('blank'))
+      expect(b.clearLocalActivity).not.toHaveBeenCalled()
+      b.clearLocalActivity.mockImplementation(() => {
+        expect(JSON.parse(backing.get('dsh.sessions.current')!)).toEqual({ sessionId: sid('blank') })
+        expect(b.sessions.retained[0]!.release).toHaveBeenCalledOnce()
+        expect(b.sessions.retained[1]!.release).not.toHaveBeenCalled()
+      })
+
+      b.uiWorkspace.startSession(wid('a'))
+      await lastOpening(opening)
+
+      expect(b.sessions.create).toHaveBeenCalledExactlyOnceWith({ workspaceId: wid('a'), sessionId: sid('blank') })
+      expect(b.clearLocalActivity).toHaveBeenCalledExactlyOnceWith(sid('blank'))
+    })
+
+    it('does not present a target as new when preparation supersedes its navigation', async () => {
+      const b = bench({ workspaces: workspaceState([workspace('a')]) })
+
+      await b.uiWorkspace.openWorkspace(wid('a'), () => { b.layout.selectPanel('other-panel' as MainPanelId) })
+
+      expect(b.sessions.retained[0]!.release).toHaveBeenCalledOnce()
+      expect(b.clearLocalActivity).not.toHaveBeenCalled()
+    })
+
+    it('opens the Workspace Session without a Conversation assembly to present', async () => {
+      const backing = persistSelection({})
+      const b = bench({ workspaces: workspaceState([workspace('a')]), uiConversation: false })
+
+      await b.uiWorkspace.openWorkspace(wid('a'))
+
+      expect(JSON.parse(backing.get('dsh.sessions.current')!)).toEqual({ sessionId: sid('created-a') })
+      expect(b.clearLocalActivity).not.toHaveBeenCalled()
+    })
+  })
+
   describe('startSession draft initialization', () => {
     it.each<{ name: string; options: DraftInitializationOptions }>([
       { name: 'plain text', options: { prompt: '草稿 🧭\nsecond line', clearPreviousDraft: true } },
@@ -872,6 +921,7 @@ describe('UiWorkspaceService', () => {
 
         expect(b.sessions.retained.some(item => item.reference.sessionId === sid('late'))).toBe(false)
         expect(b.sessions.binding).not.toHaveBeenCalledWith(sid('late'))
+        expect(b.clearLocalActivity).not.toHaveBeenCalledWith(sid('late'))
         if (kind === 'workspace') {
           expect(b.requestDraftInitialization).toHaveBeenCalledExactlyOnceWith(
             b.sessions.retained[0]!.reference.binding, { prompt: 'chosen draft' },

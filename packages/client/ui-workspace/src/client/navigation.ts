@@ -39,6 +39,8 @@ export interface UiWorkspace {
   openSession(target: SessionTarget): void
   /**
    * Connect a Workspace and open its Session unless a later navigation supersedes it.
+   * The opened Session presents as new: a reused blank Session drops the
+   * interaction this Client recorded in its Conversation and shows its Hero.
    * @param workspaceId - target Workspace.
    * @param beforeOpen - optional synchronous preparation for the selected Session,
    * skipped after supersession; a throw aborts the open and releases the retained reference.
@@ -219,7 +221,16 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       throw error
     }
     if (navigation.aborted) return
-    this.replaceMain(sessionId, navigation, 'reveal', beforeOpen)
+    if (this.replaceMain(sessionId, navigation, 'reveal', beforeOpen)) this.presentAsNew(sessionId)
+  }
+
+  /**
+   * Present a Workspace's opened blank Session as new. Reuse can return the
+   * blank Session already on screen, whose Conversation would otherwise keep
+   * showing the commands this Client ran in it instead of its Hero.
+   */
+  private presentAsNew(sessionId: SessionId): void {
+    this.ctx.get('uiConversation')?.clearLocalActivity(sessionId)
   }
 
   async forkSession(sessionId: SessionId, onCreated?: (childId: SessionId) => void): Promise<SessionId> {
@@ -401,12 +412,13 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     this.ctx.layout.selectPanel(null)
   }
 
+  /** @returns whether the target became the main selection; false when the navigation was superseded. */
   private replaceMain(
     target: SessionTarget,
     signal: AbortSignal,
     panel: 'reveal' | 'preserve',
     beforeOpen?: (sessionId: SessionId) => void,
-  ): void {
+  ): boolean {
     signal.throwIfAborted()
     const reference = this.sessions.retain(target, { source: 'mainView' })
     try {
@@ -414,7 +426,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       beforeOpen?.(reference.sessionId)
       if (signal.aborted) {
         reference.release()
-        return
+        return false
       }
       const subagentAddress = typeof target === 'string'
         ? this.sessions.subagentAddress(reference.sessionId)
@@ -431,6 +443,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     this.mainReference = reference
     previous?.release()
     if (panel === 'reveal') this.ctx.layout.selectPanel(null)
+    return true
   }
 
 }

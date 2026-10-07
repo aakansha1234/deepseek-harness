@@ -283,7 +283,7 @@ View selection order is a valid persisted selection, registered `chat`, then no 
 
 Without `ui-chat`, the shell can still activate and mount but does not implicitly select Trajectory or another target.
 
-The shell phase is a pure composition of Session lifecycle and Conversation target activity. An active Session or any target reporting visible content produces active; a failed first prompt remains engaging.
+The shell phase is a pure composition of Session lifecycle and Conversation target activity. An active Session or any target reporting visible content produces active; a failed first prompt remains engaging. A target's activity rule also receives the interaction this Client recorded for the binding, so it can count presentation of that interaction without counting history the binding loaded. The command UI records each Host command execution it starts from the composer through `uiConversation.recordExecutedCommand`; New Session clears the record through `uiConversation.clearLocalActivity` when it presents a reused blank Session as new. The record starts empty with each binding and is not persisted.
 
 ### Input and composer
 
@@ -301,7 +301,7 @@ Draft and input state belong to Conversation UI and do not enter the Session sna
 
 It registers the `chat` target source through `ctx.uiSession.provide()`. `ChatView` uses `useChat` for aggregate order, navigation, and timeline reads; each `ChatNodeSeat` receives identity-stable Node and Turn-process sources from that snapshot and does not subscribe to the aggregate source.
 
-Only visible non-command Chat Nodes activate Chat. Ordinary command-only history keeps the Hero visible; the `/goal` `command-input` Node activates a fresh Conversation.
+Visible non-command Chat Nodes activate Chat, and so does a visible command Node whose execution this Client's composer started, except `/plan`, whose mode the composer's Plan control presents. Ordinary command-only history keeps the Hero visible, so a blank Session that is reopened or reused by New Session shows its Hero while a command typed into it shows its result; the `/goal` `command-input` Node activates a fresh Conversation.
 
 The historical-image cache moved to `ui-conversation` (`ctx.uiConversation.imageUrl`), so Chat and Trajectory share one authorized read and one browser URL per session attachment ([Trajectory durable image attachments](../../archived/feature/2026-08-24-trajectory-image-attachments.md)); draft images remain part of Conversation input.
 

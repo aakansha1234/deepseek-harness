@@ -11,7 +11,9 @@ import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CommandResult } from '@deepseek-ai/dsh-commands/types'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
+import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import { scopeOf } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { RemoteError, TestRemote, TestSessions } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionFixture } from '@deepseek-ai/dsh-client-test-runtime'
@@ -47,6 +49,8 @@ interface BenchOptions {
   addressed?: SessionId
   initialOpen?: SessionFixture['initialOpen']
   snapshot?: SessionFixture['snapshot']
+  /** Fake Conversation assembly's record; default collects into `recorded`. */
+  recordExecutedCommand?: (source: SessionBinding | SessionId, commandId: CommandId) => void
 }
 
 /**
@@ -152,6 +156,12 @@ async function bench(opts: BenchOptions = {}) {
       }),
     },
   })
+  /** Executions the fake Conversation assembly recorded as this Client's interaction. */
+  const recorded: Array<{ source: SessionBinding | SessionId; commandId: CommandId }> = []
+  const removeUiConversation = ctx.provide('uiConversation', {
+    recordExecutedCommand: opts.recordExecutedCommand
+      ?? ((source: SessionBinding | SessionId, commandId: CommandId) => { recorded.push({ source, commandId }) }),
+  })
   const fiber = ctx.plugin(CommandUiRuntime)
   await fiber.await()
   const command = ctx.get('commandUi') as CommandUiRuntime
@@ -163,7 +173,7 @@ async function bench(opts: BenchOptions = {}) {
   }
   return {
     ctx, fiber, command, source, mint, warm, listCalls, executeCalls, executions, registered, notices, focuses, remote,
-    removeSessions, removeConversation, sessions,
+    recorded, removeSessions, removeConversation, removeUiConversation, sessions,
   }
 }
 
@@ -906,6 +916,100 @@ describe('execute payload', () => {
     expect(bad.kind).toBe('error')
     const second = await claimOf({ execute: () => Promise.resolve({ matched: true }) })
     await expect(second.submit('', new Context(), [])).resolves.toEqual({ kind: 'success' })
+  })
+})
+
+describe('Conversation activity record', () => {
+  /** The `/goal` argument claim of one warmed Session. */
+  const goalClaim = (source: InputTriggerSource, id: string) => {
+    const outcome = source.matchSpace!(proj(id), '/goal')
+    if (outcome === undefined || outcome === 'handled' || !('claim' in outcome)) throw new Error('expected claim')
+    return outcome.claim
+  }
+
+  it('records each admitted execution with the submitting Session generation on every composer route', async () => {
+    let issued = 0
+    const { source, sessions, warm, recorded } = await bench({
+      execute: () => Promise.resolve({ matched: true, commandId: `command-${++issued}` }),
+    })
+    await warm(proj('s1'))
+    const binding = sessions.binding('s1')
+    expect(binding).toBeDefined()
+
+    await expect(goalClaim(source, 's1').submit('ship it', new Context(), [])).resolves.toEqual({ kind: 'success' })
+    await expect(source.matchEnter!(proj('s1'), '/plan', new AbortController().signal, { attachments: 0 })).resolves.toBe('handled')
+    await vi.waitFor(() => { expect(recorded).toHaveLength(2) })
+    expect(menuPick(source, 'plan', proj('s1'))).toBe('handled')
+    await vi.waitFor(() => { expect(recorded).toHaveLength(3) })
+
+    expect(recorded).toEqual([
+      { source: binding, commandId: 'command-1' },
+      { source: binding, commandId: 'command-2' },
+      { source: binding, commandId: 'command-3' },
+    ])
+  })
+
+  it('records a handler error, whose row still renders, but not an unmatched line or a refused call', async () => {
+    const answers: Array<() => Promise<ExecuteValue>> = [
+      () => Promise.resolve({ matched: true, commandId: 'command-error', result: { kind: 'error', text: 'refused by handler' } }),
+      () => Promise.resolve({ matched: false }),
+      () => Promise.reject(new Error('transport down')),
+    ]
+    const { source, warm, recorded } = await bench({
+      execute: () => (answers.shift() ?? (() => Promise.reject(new Error('unexpected execute'))))(),
+    })
+    await warm(proj('s1'))
+    const claim = goalClaim(source, 's1')
+
+    await expect(claim.submit('x', new Context(), [])).resolves.toEqual({ kind: 'success' })
+    await expect(claim.submit('x', new Context(), [])).resolves.toMatchObject({ kind: 'error' })
+    await expect(claim.submit('x', new Context(), [])).rejects.toThrow('transport down')
+    expect(recorded.map(entry => entry.commandId)).toEqual(['command-error'])
+  })
+
+  it('drops the record when the submitting Session generation is replaced while the call is in flight', async () => {
+    let admit: (value: ExecuteValue) => void = () => {}
+    const { source, sessions, warm, executeCalls, executions, recorded } = await bench({
+      execute: () => new Promise<ExecuteValue>((resolve) => { admit = resolve }),
+    })
+    const reference = sessions.retain(sid('other'))
+    await reference.ready
+    await warm(proj('other'))
+    const submitting = reference.binding
+
+    const settled = goalClaim(source, 'other').submit('ship it', new Context(), [])
+    await vi.waitFor(() => { expect(executeCalls).toHaveLength(1) })
+    reference.release()
+    const replacement = sessions.retain(sid('other'))
+    onTestFinished(() => { replacement.release() })
+    expect(replacement.binding).not.toBe(submitting)
+    admit({ matched: true, commandId: 'command-late' })
+
+    await expect(settled).resolves.toEqual({ kind: 'success' })
+    expect(executions).toHaveLength(1)
+    expect(recorded).toEqual([])
+  })
+
+  it('contains a failing record without changing admission or the local acknowledgment', async () => {
+    const failure = new Error('activity record failed')
+    const { ctx, source, warm, executions } = await bench({ recordExecutedCommand: () => { throw failure } })
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => undefined)
+    await warm(proj('s1'))
+
+    await expect(goalClaim(source, 's1').submit('ship it', new Context(), [])).resolves.toEqual({ kind: 'success' })
+    expect(executions).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith('client command: recording the execution of "%s" failed', 'goal')
+    expect(warn).toHaveBeenCalledWith(failure)
+  })
+
+  it('executes without a Conversation assembly to record into', async () => {
+    const { source, warm, executions, recorded, removeUiConversation } = await bench()
+    removeUiConversation()
+    await warm(proj('s1'))
+
+    await expect(goalClaim(source, 's1').submit('ship it', new Context(), [])).resolves.toEqual({ kind: 'success' })
+    expect(executions).toHaveLength(1)
+    expect(recorded).toEqual([])
   })
 })
 

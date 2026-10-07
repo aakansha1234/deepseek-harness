@@ -1,9 +1,10 @@
 import type {
   SessionAssistantSettlementEntry, SessionEventLikeEntry, SessionTransientEventEntry,
 } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type { LlmAttemptId } from '@deepseek-ai/dsh-llm/brand'
 import type {
-  ConversationContextReader, ConversationLocationData, ConversationMatch,
+  ConversationContextReader, ConversationLocalActivity, ConversationLocationData, ConversationMatch,
   ConversationNodeContext, ConversationNodeDefinition, ConversationPreviousContext,
   ConversationLocationDataScope, ConversationPublication, ConversationViewBuilder,
   ConversationStartMatch,
@@ -52,7 +53,7 @@ interface ViewState {
   readonly target: string
   readonly definition: ConversationViewDefinition
   readonly groupDefinition: ConversationGroupDefinition | undefined
-  readonly isActive: ((snapshot: unknown) => boolean) | undefined
+  readonly isActive: ((snapshot: unknown, local: ConversationLocalActivity) => boolean) | undefined
   builder: ConversationViewBuilder | undefined
   snapshot: unknown
 }
@@ -186,6 +187,8 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
   private readonly groups = new Map<string, GroupState>()
   private readonly pendingGroupStores = new Set<ConversationGroupStore<unknown>>()
   private readonly activeTargets = new Set<string>()
+  private readonly executedCommands = new Set<CommandId>()
+  private readonly local: ConversationLocalActivity = { commands: this.executedCommands }
   private hasMore = false
   private replacePending = true
   private timelineDirty = true
@@ -447,9 +450,32 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
     for (const target of this.activeTargets) {
       const view = this.views.get(target)
       if (view === undefined) continue
-      if (view.isActive?.(view.snapshot) === true) active.add(view.target)
+      if (view.isActive?.(view.snapshot, this.local) === true) active.add(view.target)
     }
     return active
+  }
+
+  /**
+   * Record a Host command execution this Client's composer started, so target
+   * activity can count its presentation whether its events arrive before or
+   * after the Host admits it.
+   * @param commandId - pairing id the Host executor returned.
+   * @returns whether the record changed.
+   */
+  recordExecutedCommand(commandId: CommandId): boolean {
+    if (this.executedCommands.has(commandId)) return false
+    this.executedCommands.add(commandId)
+    return true
+  }
+
+  /**
+   * Forget every interaction this Client recorded, as when the Session is presented as new.
+   * @returns whether the record changed.
+   */
+  clearLocalActivity(): boolean {
+    if (this.executedCommands.size === 0) return false
+    this.executedCommands.clear()
+    return true
   }
 
   private sortedInputs(): SessionEventLikeEntry[] {
@@ -1052,7 +1078,7 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
         groupDefinition: this.groupDefinitions.forTarget(definition.target),
         isActive: definition.isActive === undefined
           ? undefined
-          : snapshot => definition.isActive?.(snapshot) === true,
+          : (snapshot, local) => definition.isActive?.(snapshot, local) === true,
         builder: undefined,
         snapshot: undefined,
       }

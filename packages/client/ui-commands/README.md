@@ -45,6 +45,8 @@ First-party command definitions carry stable `definitionId` values. The client s
 
 When the composer submits with images or generic files, only a host command declaring `input.attachments` proceeds. Every other command route throws the localized `attachmentsUnsupported` refusal, rendered as a transient toast while the draft and attachment cards stay in place. Handler errors preserve the same draft state for retry.
 
+Every composer route — an argument claim, a bare Enter, or a menu pick — executes through one transaction. It records the admitted Host `commandId` with `uiConversation.recordExecutedCommand` for the submitting Session generation, so the command's Chat row reveals a blank Session's Conversation while command history loaded with the Session keeps the Hero. A generation replaced during the call records nothing, and a recording failure is logged without changing admission.
+
 -----
 
 <a id="understand-the-implementation"></a>

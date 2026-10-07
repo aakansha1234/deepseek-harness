@@ -45,6 +45,8 @@ popupSelect 规格可提供 `searchLabels()`，在每次打开时解析占位文
 
 composer 携带图片或通用文件提交时，只有声明了 `input.attachments` 的宿主命令继续。其余命令路径都会抛出本地化的 `attachmentsUnsupported` 拒绝，以瞬态 toast 呈现，草稿与附件卡保持原位。处理器出错时保留相同草稿状态供用户重试。
 
+所有 composer 路径——参数认领、裸 Enter 或菜单选择——都经由同一个执行事务。它通过 `uiConversation.recordExecutedCommand` 为发起提交的 Session generation 记录已受理的宿主 `commandId`，因此该命令的 Chat 行会让空白 Session 显示 Conversation，而随 Session 加载的命令历史仍保持 Hero。调用期间被替换的 generation 不会记录；记录失败只写日志，不改变受理结果。
+
 -----
 
 <a id="understand-the-implementation"></a>

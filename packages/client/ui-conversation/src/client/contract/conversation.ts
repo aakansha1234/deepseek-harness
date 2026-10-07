@@ -1,4 +1,5 @@
 import type { SessionEventLike } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type {
   ConversationGroupData, ConversationGroupedView, ConversationGroupInput,
@@ -317,9 +318,23 @@ export interface ConversationViewDefinition<Node extends ConversationViewNode = 
   /**
    * Decide whether this target contributes visible Conversation activity.
    * @param snapshot - latest target-owned snapshot.
+   * @param local - interaction this Client recorded for the Session.
    * @returns whether the shell should treat this target as active.
    */
-  isActive?(snapshot: Snapshot): boolean
+  isActive?(snapshot: Snapshot, local: ConversationLocalActivity): boolean
+}
+
+/**
+ * Interaction a Client recorded for one Session binding since the Session was
+ * last presented as new, as distinct from history the binding loaded. A
+ * target uses it to count its own presentation of that interaction as
+ * activity while history-only presentation leaves a blank Session's Hero in
+ * place. The record starts empty with each binding, is cleared when New
+ * Session reuses the Session, and is not persisted.
+ */
+export interface ConversationLocalActivity {
+  /** Host command executions this Client's composer started. */
+  readonly commands: ReadonlySet<CommandId>
 }
 
 /**
